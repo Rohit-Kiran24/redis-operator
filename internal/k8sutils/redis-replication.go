@@ -28,7 +28,12 @@ func CreateReplicationService(ctx context.Context, cr *rrvb2.RedisReplication, c
 
 	annotations := generateServiceAnots(cr.ObjectMeta, nil, epp)
 	objectMetaInfo := generateObjectMetaInformation(cr.Name, cr.Namespace, labels, annotations)
-	headlessObjectMetaInfo := generateObjectMetaInformation(cr.Name+"-headless", cr.Namespace, labels, annotations)
+	headlessObjectMetaInfo := generateObjectMetaInformation(
+		cr.Name+"-headless",
+		cr.Namespace,
+		labels,
+		generateServiceAnots(cr.ObjectMeta, cr.Spec.KubernetesConfig.GetHeadlessServiceAnnotations(), epp),
+	)
 	additionalObjectMetaInfo := generateObjectMetaInformation(cr.Name+"-additional", cr.Namespace, labels, generateServiceAnots(cr.ObjectMeta, cr.Spec.KubernetesConfig.GetServiceAnnotations(), epp))
 	masterLabels := maps.Merge(
 		labels, map[string]string{common.RedisRoleLabelKey: common.RedisRoleLabelMaster},
@@ -58,6 +63,14 @@ func CreateReplicationService(ctx context.Context, cr *rrvb2.RedisReplication, c
 	if err := CreateOrUpdateService(ctx, cr.Namespace, replicaObjectMetaInfo, redisReplicationAsOwner(cr), disableMetrics, false, "ClusterIP", common.RedisPort, cl); err != nil {
 		log.FromContext(ctx).Error(err, "Cannot create replica service for Redis")
 		return err
+	}
+	if cr.Spec.RedisExporter != nil && cr.Spec.RedisExporter.Enabled {
+		exporterPort := *util.Coalesce(cr.Spec.RedisExporter.Port, ptr.To(common.RedisExporterPort))
+		selectorLabels := getRedisStableLabels(cr.Name, string(replication), "replication")
+		if err := CreateOrUpdateMetricsService(ctx, cr.Namespace, cr.Name+"-metrics", selectorLabels, redisReplicationAsOwner(cr), exporterPort, cl); err != nil {
+			log.FromContext(ctx).Error(err, "Cannot create metrics service for Redis Replication")
+			return err
+		}
 	}
 
 	return nil
